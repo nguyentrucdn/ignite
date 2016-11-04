@@ -63,25 +63,15 @@ public class GridDhtPartitionMap2 implements Comparable<GridDhtPartitionMap2>, E
     /**
      * @param nodeId Node ID.
      * @param updateSeq Update sequence number.
-     */
-    public GridDhtPartitionMap2(UUID nodeId, long updateSeq) {
-        assert nodeId != null;
-        assert updateSeq > 0;
-
-        this.nodeId = nodeId;
-        this.updateSeq = updateSeq;
-
-        map = new HashMap<>();
-    }
-
-    /**
-     * @param nodeId Node ID.
-     * @param updateSeq Update sequence number.
+     * @param top Topology version.
      * @param m Map to copy.
      * @param onlyActive If {@code true}, then only active states will be included.
      */
-    public GridDhtPartitionMap2(UUID nodeId, long updateSeq, AffinityTopologyVersion top,
-        Map<Integer, GridDhtPartitionState> m, boolean onlyActive) {
+    public GridDhtPartitionMap2(UUID nodeId,
+        long updateSeq,
+        AffinityTopologyVersion top,
+        Map<Integer, GridDhtPartitionState> m,
+        boolean onlyActive) {
         assert nodeId != null;
         assert updateSeq > 0;
 
@@ -97,6 +87,20 @@ public class GridDhtPartitionMap2 implements Comparable<GridDhtPartitionMap2>, E
             if (!onlyActive || state.active())
                 put(e.getKey(), state);
         }
+    }
+
+    private GridDhtPartitionMap2(UUID nodeId, long updateSeq, AffinityTopologyVersion top, Map<Integer, GridDhtPartitionState> map, int moving) {
+        this.nodeId = nodeId;
+        this.updateSeq = updateSeq;
+        this.top = top;
+        this.map = map;
+        this.moving = moving;
+    }
+
+    public GridDhtPartitionMap2 emptyCopy() {
+        Map<Integer, GridDhtPartitionState> map = new HashMap<>();
+
+        return new GridDhtPartitionMap2(nodeId, updateSeq, top, map, moving);
     }
 
     /**
@@ -171,6 +175,13 @@ public class GridDhtPartitionMap2 implements Comparable<GridDhtPartitionMap2>, E
      */
     public Map<Integer, GridDhtPartitionState> map() {
         return map;
+    }
+
+    /**
+     * @param map Partition states map.
+     */
+    public void map(Map<Integer, GridDhtPartitionState> map) {
+        this.map = map;
     }
 
     /**

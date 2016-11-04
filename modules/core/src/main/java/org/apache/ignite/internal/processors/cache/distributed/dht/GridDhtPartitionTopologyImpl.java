@@ -71,6 +71,9 @@ class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
     /** Flag to control amount of output for full map. */
     private static final boolean FULL_MAP_DEBUG = false;
 
+    /** */
+    private static final Long ZERO = 0L;
+
     /** Context. */
     private final GridCacheContext<?, ?> cctx;
 
@@ -1029,7 +1032,7 @@ class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 for (Map.Entry<Integer, Long> e : cntrMap.entrySet()) {
                     Long cntr = this.cntrMap.get(e.getKey());
 
-                    if (cntr == null || cntr < e.getValue())
+                    if ((cntr == null || cntr < e.getValue()) && !e.getValue().equals(ZERO))
                         this.cntrMap.put(e.getKey(), e.getValue());
                 }
 
@@ -1169,7 +1172,7 @@ class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 for (Map.Entry<Integer, Long> e : cntrMap.entrySet()) {
                     Long cntr = this.cntrMap.get(e.getKey());
 
-                    if (cntr == null || cntr < e.getValue())
+                    if ((cntr == null || cntr < e.getValue()) && !e.getValue().equals(ZERO))
                         this.cntrMap.put(e.getKey(), e.getValue());
                 }
 
@@ -1513,9 +1516,9 @@ class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                     continue;
 
                 Long cntr0 = res.get(part.id());
-                Long cntr1 = part.updateCounter();
+                long cntr1 = part.updateCounter();
 
-                if (cntr0 == null || cntr1 > cntr0)
+                if ((cntr0 == null || cntr1 > cntr0) && cntr1 != 0)
                     res.put(part.id(), cntr1);
             }
 

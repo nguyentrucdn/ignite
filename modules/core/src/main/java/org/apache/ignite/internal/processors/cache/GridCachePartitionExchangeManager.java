@@ -72,6 +72,7 @@ import org.apache.ignite.internal.processors.cache.distributed.dht.preloader.Gri
 import org.apache.ignite.internal.processors.cache.distributed.dht.preloader.GridDhtPreloaderAssignments;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteInternalTx;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxManager;
+import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
 import org.apache.ignite.internal.processors.timeout.GridTimeoutObject;
 import org.apache.ignite.internal.util.GridListSet;
 import org.apache.ignite.internal.util.future.GridFutureAdapter;
@@ -81,6 +82,7 @@ import org.apache.ignite.internal.util.tostring.GridToStringInclude;
 import org.apache.ignite.internal.util.typedef.CI1;
 import org.apache.ignite.internal.util.typedef.CI2;
 import org.apache.ignite.internal.util.typedef.F;
+import org.apache.ignite.internal.util.typedef.T2;
 import org.apache.ignite.internal.util.typedef.internal.CU;
 import org.apache.ignite.internal.util.typedef.internal.GPC;
 import org.apache.ignite.internal.util.typedef.internal.S;
@@ -762,43 +764,8 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
      * @param nodes Nodes.
      * @return {@code True} if message was sent, {@code false} if node left grid.
      */
-    private boolean sendAllPartitions(Collection<? extends ClusterNode> nodes) {
-        GridDhtPartitionsFullMessage m = new GridDhtPartitionsFullMessage(null, null, AffinityTopologyVersion.NONE);
-
-        boolean useOldApi = false;
-        boolean compress = true;
-
-        for (ClusterNode node : nodes) {
-            if (node.version().compareTo(GridDhtPartitionMap2.SINCE) < 0) {
-                useOldApi = true;
-                compress = false;
-
-                break;
-            }
-            else if (node.version().compareToIgnoreTimestamp(GridDhtPartitionsAbstractMessage.PART_MAP_COMPRESS_SINCE) < 0)
-                compress = false;
-        }
-
-        m.compress(compress);
-
-        for (GridCacheContext cacheCtx : cctx.cacheContexts()) {
-            if (!cacheCtx.isLocal() && cacheCtx.started()) {
-                GridDhtPartitionFullMap locMap = cacheCtx.topology().partitionMap(true);
-
-                if (useOldApi) {
-                    locMap = new GridDhtPartitionFullMap(locMap.nodeId(),
-                        locMap.nodeOrder(),
-                        locMap.updateSequence(),
-                        locMap);
-                }
-
-                m.addFullPartitionsMap(cacheCtx.cacheId(), locMap);
-            }
-        }
-
-        // It is important that client topologies be added after contexts.
-        for (GridClientPartitionTopology top : cctx.exchange().clientTopologies())
-            m.addFullPartitionsMap(top.cacheId(), top.partitionMap(true));
+    private boolean sendAllPartitions(Collection<ClusterNode> nodes) {
+        GridDhtPartitionsFullMessage m = createPartitionsMessage(nodes, null, null, true);
 
         if (log.isDebugEnabled())
             log.debug("Sending all partitions [nodeIds=" + U.nodeIds(nodes) + ", msg=" + m + ']');
@@ -818,6 +785,108 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
         }
 
         return true;
+    }
+    /**
+     * @param nodes Target nodes.
+     * @return Message;
+     */
+    public GridDhtPartitionsFullMessage createPartitionsMessage(Collection<ClusterNode> nodes,
+        GridDhtPartitionExchangeId exchId,
+        GridCacheVersion lastVer,
+        boolean compress) {
+        GridDhtPartitionsFullMessage m = new GridDhtPartitionsFullMessage(exchId,
+                lastVer,
+                exchId != null ? exchId.topologyVersion() : AffinityTopologyVersion.NONE);
+
+        boolean useOldApi = false;
+
+        if (nodes != null) {
+            for (ClusterNode node : nodes) {
+                if (node.version().compareTo(GridDhtPartitionMap2.SINCE) < 0) {
+                    useOldApi = true;
+                    compress = false;
+
+                    break;
+                }
+                else if (node.version().compareToIgnoreTimestamp(GridDhtPartitionsAbstractMessage.PART_MAP_COMPRESS_SINCE) < 0)
+                    compress = false;
+            }
+        }
+
+        m.compress(compress);
+
+        Map<Object, T2<Integer, GridDhtPartitionFullMap>> dupData = new HashMap<>();
+
+        for (GridCacheContext cacheCtx : cctx.cacheContexts()) {
+            if (!cacheCtx.isLocal()) {
+                boolean ready;
+
+                if (exchId != null) {
+                    AffinityTopologyVersion startTopVer = cacheCtx.startTopologyVersion();
+
+                    ready = startTopVer == null || startTopVer.compareTo(exchId.topologyVersion()) <= 0;
+                }
+                else
+                    ready = cacheCtx.started();
+
+                if (ready) {
+                    GridDhtPartitionFullMap locMap = cacheCtx.topology().partitionMap(true);
+
+                    if (useOldApi)
+                        locMap = new GridDhtPartitionFullMap(locMap.nodeId(), locMap.nodeOrder(), locMap.updateSequence(), locMap);
+
+                    addFullPartitionsMap(m,
+                        dupData,
+                        compress,
+                        cacheCtx.cacheId(),
+                        locMap,
+                        cacheCtx.affinity().affinityCache().similarAffinityKey());
+
+                    if (exchId != null)
+                        m.addPartitionUpdateCounters(cacheCtx.cacheId(), cacheCtx.topology().updateCounters());
+                }
+            }
+        }
+
+        // It is important that client topologies be added after contexts.
+        for (GridClientPartitionTopology top : cctx.exchange().clientTopologies()) {
+            m.addFullPartitionsMap(top.cacheId(), top.partitionMap(true));
+
+            if (exchId != null)
+                m.addPartitionUpdateCounters(top.cacheId(), top.updateCounters());
+        }
+
+        return m;
+    }
+
+    private void addFullPartitionsMap(GridDhtPartitionsFullMessage m,
+        Map<Object, T2<Integer, GridDhtPartitionFullMap>> dupData,
+        boolean compress,
+        Integer cacheId,
+        GridDhtPartitionFullMap locMap,
+        Object affKey) {
+        Integer dupDataCache = null;
+
+        if (compress) {
+            T2<Integer, GridDhtPartitionFullMap> state0 = dupData.get(affKey);
+
+            if (state0 != null && state0.get2().partitionStateEquals(locMap)) {
+                GridDhtPartitionFullMap locMap0 = new GridDhtPartitionFullMap(locMap.nodeId(),
+                    locMap.nodeOrder(),
+                    locMap.updateSequence());
+
+                for (Map.Entry<UUID, GridDhtPartitionMap2> e : locMap.entrySet())
+                    locMap0.put(e.getKey(), e.getValue().emptyCopy());
+
+                locMap = locMap0;
+
+                dupDataCache = state0.get1();
+            }
+            else
+                dupData.put(affKey, new T2<>(cacheId, locMap));
+        }
+
+        m.addFullPartitionsMap(cacheId, locMap, dupDataCache);
     }
 
     /**
