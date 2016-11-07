@@ -870,7 +870,7 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
                         cacheCtx.affinity().affinityCache().similarAffinityKey());
 
                     if (exchId != null)
-                        m.addPartitionUpdateCounters(cacheCtx.cacheId(), cacheCtx.topology().updateCounters());
+                        m.addPartitionUpdateCounters(cacheCtx.cacheId(), cacheCtx.topology().updateCounters(true));
                 }
             }
         }
@@ -887,7 +887,7 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
                 top.similarAffinityKey());
 
             if (exchId != null)
-                m.addPartitionUpdateCounters(top.cacheId(), top.updateCounters());
+                m.addPartitionUpdateCounters(top.cacheId(), top.updateCounters(true));
         }
 
         return m;
@@ -994,7 +994,7 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
                     cacheCtx.affinity().affinityCache().similarAffinityKey());
 
                 if (sndCounters)
-                    m.partitionUpdateCounters(cacheCtx.cacheId(), cacheCtx.topology().updateCounters());
+                    m.partitionUpdateCounters(cacheCtx.cacheId(), cacheCtx.topology().updateCounters(true));
             }
         }
 
