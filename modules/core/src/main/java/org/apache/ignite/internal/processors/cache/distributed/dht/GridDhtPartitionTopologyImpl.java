@@ -1032,7 +1032,7 @@ class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 for (Map.Entry<Integer, Long> e : cntrMap.entrySet()) {
                     Long cntr = this.cntrMap.get(e.getKey());
 
-                    if ((cntr == null || cntr < e.getValue()) && !e.getValue().equals(ZERO))
+                    if (cntr == null || cntr < e.getValue())
                         this.cntrMap.put(e.getKey(), e.getValue());
                 }
 
@@ -1172,7 +1172,7 @@ class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 for (Map.Entry<Integer, Long> e : cntrMap.entrySet()) {
                     Long cntr = this.cntrMap.get(e.getKey());
 
-                    if ((cntr == null || cntr < e.getValue()) && !e.getValue().equals(ZERO))
+                    if (cntr == null || cntr < e.getValue())
                         this.cntrMap.put(e.getKey(), e.getValue());
                 }
 
@@ -1503,11 +1503,26 @@ class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
     }
 
     /** {@inheritDoc} */
-    @Override public Map<Integer, Long> updateCounters() {
+    @Override public Map<Integer, Long> updateCounters(boolean skipZeros) {
         lock.readLock().lock();
 
         try {
-            Map<Integer, Long> res = new HashMap<>(cntrMap);
+            Map<Integer, Long> res;
+
+            if (skipZeros) {
+                res = U.newHashMap(cntrMap.size());
+
+                for (Map.Entry<Integer, Long> e : cntrMap.entrySet()) {
+                    Long cntr = e.getValue();
+
+                    if (ZERO.equals(cntr))
+                        continue;
+
+                    res.put(e.getKey(), cntr);
+                }
+            }
+            else
+                res = new HashMap<>(cntrMap);
 
             for (int i = 0; i < locParts.length; i++) {
                 GridDhtLocalPartition part = locParts[i];
@@ -1518,7 +1533,10 @@ class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 Long cntr0 = res.get(part.id());
                 long cntr1 = part.updateCounter();
 
-                if ((cntr0 == null || cntr1 > cntr0) && cntr1 != 0L)
+                if (skipZeros && cntr1 == 0L)
+                    continue;
+
+                if (cntr0 == null || cntr1 > cntr0)
                     res.put(part.id(), cntr1);
             }
 

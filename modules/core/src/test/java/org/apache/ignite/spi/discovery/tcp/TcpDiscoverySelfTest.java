@@ -49,6 +49,7 @@ import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.events.DiscoveryEvent;
 import org.apache.ignite.events.Event;
 import org.apache.ignite.events.EventType;
+import org.apache.ignite.internal.GridComponent;
 import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.IgniteInternalFuture;
 import org.apache.ignite.internal.IgniteKernal;
@@ -114,6 +115,9 @@ public class TcpDiscoverySelfTest extends GridCommonAbstractTest {
     /** */
     private GridStringLogger strLog;
 
+    /** */
+    private CacheConfiguration[] ccfgs;
+
     /**
      * @throws Exception If fails.
      */
@@ -152,7 +156,10 @@ public class TcpDiscoverySelfTest extends GridCommonAbstractTest {
 
         cfg.setDiscoverySpi(spi);
 
-        cfg.setCacheConfiguration();
+        if (ccfgs != null)
+            cfg.setCacheConfiguration(ccfgs);
+        else
+            cfg.setCacheConfiguration();
 
         cfg.setIncludeEventTypes(EVT_TASK_FAILED, EVT_TASK_FINISHED, EVT_JOB_MAPPED);
 
@@ -194,9 +201,8 @@ public class TcpDiscoverySelfTest extends GridCommonAbstractTest {
         }
         else if (gridName.contains("testPingInterruptedOnNodeFailedPingingNode"))
             cfg.setFailureDetectionTimeout(30_000);
-        else if (gridName.contains("testNoRingMessageWorkerAbnormalFailureNormalNode")) {
+        else if (gridName.contains("testNoRingMessageWorkerAbnormalFailureNormalNode"))
             cfg.setFailureDetectionTimeout(3_000);
-        }
         else if (gridName.contains("testNoRingMessageWorkerAbnormalFailureSegmentedNode")) {
             cfg.setFailureDetectionTimeout(6_000);
 
@@ -1961,6 +1967,51 @@ public class TcpDiscoverySelfTest extends GridCommonAbstractTest {
     }
 
     /**
+     * @throws Exception If failed.
+     */
+    public void testDuplicatedDiscoveryDataRemoved() throws Exception {
+        try {
+            TestDiscoveryDataDuplicateSpi.checkNodeAdded = false;
+            TestDiscoveryDataDuplicateSpi.fail = false;
+
+//            ccfgs = new CacheConfiguration[5];
+//
+//            for (int i = 0; i < ccfgs.length; i++) {
+//                CacheConfiguration ccfg = new CacheConfiguration();
+//                ccfg.setName("static-cache-" + i);
+//
+//                ccfgs[i] = ccfg;
+//            }
+
+            TestDiscoveryDataDuplicateSpi spi = new TestDiscoveryDataDuplicateSpi();
+
+            nodeSpi.set(spi);
+
+            Ignite ignite0 = startGrid(0);
+
+            CacheConfiguration ccfg1 = new CacheConfiguration();
+            ccfg1.setName("cache1");
+
+            ignite0.createCache(ccfg1);
+
+            nodeSpi.set(new TestDiscoveryDataDuplicateSpi());
+            startGrid(1);
+
+            nodeSpi.set(new TestDiscoveryDataDuplicateSpi());
+            startGrid(2);
+
+            nodeSpi.set(new TestDiscoveryDataDuplicateSpi());
+            startGrid(3);
+
+            assertTrue(TestDiscoveryDataDuplicateSpi.checkNodeAdded);
+            assertFalse(TestDiscoveryDataDuplicateSpi.fail);
+        }
+        finally {
+            stopAllGrids();
+        }
+    }
+
+    /**
      * @param nodeName Node name.
      * @throws Exception If failed.
      */
@@ -2012,6 +2063,47 @@ public class TcpDiscoverySelfTest extends GridCommonAbstractTest {
         /** {@inheritDoc} */
         @Override public boolean apply(UUID uuid, Object o) {
             return true;
+        }
+    }
+
+    /**
+     *
+     */
+    private static class TestDiscoveryDataDuplicateSpi extends TcpDiscoverySpi {
+        /** */
+        static volatile boolean fail;
+
+        /** */
+        static volatile boolean checkNodeAdded;
+
+        /** {@inheritDoc} */
+        @Override protected void writeToSocket(Socket sock, OutputStream out,
+            TcpDiscoveryAbstractMessage msg,
+            long timeout) throws IOException, IgniteCheckedException {
+            if (msg instanceof TcpDiscoveryNodeAddedMessage) {
+                Map<UUID, Map<Integer, byte[]>> discoData = ((TcpDiscoveryNodeAddedMessage)msg).oldNodesDiscoveryData();
+
+                int cnt = 0;
+
+                if (discoData != null && discoData.size() > 1) {
+                    for (Map.Entry<UUID, Map<Integer, byte[]>> e : discoData.entrySet()) {
+                        Map<Integer, byte[]> map = e.getValue();
+
+                        if (map.containsKey(GridComponent.DiscoveryDataExchangeType.CACHE_PROC.ordinal()))
+                            cnt++;
+                    }
+
+                    checkNodeAdded = true;
+
+                    if (cnt > 1) {
+                        fail = true;
+
+                        log.error("Expect cache data only from one node, but actually: " + cnt);
+                    }
+                }
+            }
+
+            super.writeToSocket(sock, out, msg, timeout);
         }
     }
 
