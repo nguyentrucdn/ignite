@@ -21,6 +21,7 @@ import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
@@ -44,7 +45,9 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteSystemProperties;
+import org.apache.ignite.cache.affinity.AffinityFunction;
 import org.apache.ignite.cluster.ClusterNode;
+import org.apache.ignite.configuration.CacheConfiguration;
 import org.apache.ignite.events.DiscoveryEvent;
 import org.apache.ignite.events.Event;
 import org.apache.ignite.internal.IgniteClientDisconnectedCheckedException;
@@ -56,6 +59,7 @@ import org.apache.ignite.internal.events.DiscoveryCustomEvent;
 import org.apache.ignite.internal.managers.eventstorage.GridLocalEventListener;
 import org.apache.ignite.internal.processors.affinity.AffinityTopologyVersion;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridClientPartitionTopology;
+import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionState;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionTopology;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTopologyFuture;
 import org.apache.ignite.internal.processors.cache.distributed.dht.preloader.GridDhtPartitionDemandMessage;
@@ -534,8 +538,23 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
         if (top != null)
             return top;
 
+        Object affKey = null;
+
+        DynamicCacheDescriptor desc = cctx.cache().cacheDescriptor(cacheId);
+
+        if (desc != null) {
+            CacheConfiguration ccfg = desc.cacheConfiguration();
+
+            AffinityFunction aff = ccfg.getAffinity();
+
+            affKey = cctx.kernalContext().affinity().similaryAffinityKey(aff,
+                ccfg.getNodeFilter(),
+                ccfg.getBackups(),
+                aff.partitions());
+        }
+
         GridClientPartitionTopology old = clientTops.putIfAbsent(cacheId,
-            top = new GridClientPartitionTopology(cctx, cacheId, exchFut));
+            top = new GridClientPartitionTopology(cctx, cacheId, exchFut, affKey));
 
         return old != null ? old : top;
     }
@@ -765,7 +784,7 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
      * @return {@code True} if message was sent, {@code false} if node left grid.
      */
     private boolean sendAllPartitions(Collection<ClusterNode> nodes) {
-        GridDhtPartitionsFullMessage m = createPartitionsMessage(nodes, null, null, true);
+        GridDhtPartitionsFullMessage m = createPartitionsFullMessage(nodes, null, null, true);
 
         if (log.isDebugEnabled())
             log.debug("Sending all partitions [nodeIds=" + U.nodeIds(nodes) + ", msg=" + m + ']');
@@ -786,13 +805,17 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
 
         return true;
     }
+
     /**
      * @param nodes Target nodes.
-     * @return Message;
+     * @param exchId Non-null exchange ID if message is created for exchange.
+     * @param lastVer Last version.
+     * @param compress {@code True} if it is possible to use compression for message.
+     * @return Message.
      */
-    public GridDhtPartitionsFullMessage createPartitionsMessage(Collection<ClusterNode> nodes,
-        GridDhtPartitionExchangeId exchId,
-        GridCacheVersion lastVer,
+    public GridDhtPartitionsFullMessage createPartitionsFullMessage(Collection<ClusterNode> nodes,
+        @Nullable GridDhtPartitionExchangeId exchId,
+        @Nullable GridCacheVersion lastVer,
         boolean compress) {
         GridDhtPartitionsFullMessage m = new GridDhtPartitionsFullMessage(exchId,
                 lastVer,
@@ -832,8 +855,12 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
                 if (ready) {
                     GridDhtPartitionFullMap locMap = cacheCtx.topology().partitionMap(true);
 
-                    if (useOldApi)
-                        locMap = new GridDhtPartitionFullMap(locMap.nodeId(), locMap.nodeOrder(), locMap.updateSequence(), locMap);
+                    if (useOldApi) {
+                        locMap = new GridDhtPartitionFullMap(locMap.nodeId(),
+                            locMap.nodeOrder(),
+                            locMap.updateSequence(),
+                            locMap);
+                    }
 
                     addFullPartitionsMap(m,
                         dupData,
@@ -850,7 +877,14 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
 
         // It is important that client topologies be added after contexts.
         for (GridClientPartitionTopology top : cctx.exchange().clientTopologies()) {
-            m.addFullPartitionsMap(top.cacheId(), top.partitionMap(true));
+            GridDhtPartitionFullMap map = top.partitionMap(true);
+
+            addFullPartitionsMap(m,
+                dupData,
+                compress,
+                top.cacheId(),
+                map,
+                top.similarAffinityKey());
 
             if (exchId != null)
                 m.addPartitionUpdateCounters(top.cacheId(), top.updateCounters());
@@ -859,34 +893,42 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
         return m;
     }
 
+    /**
+     * @param m Message.
+     * @param dupData Duplicated data map.
+     * @param compress {@code True} if need check for duplicated partition state data.
+     * @param cacheId Cache ID.
+     * @param map Map to add.
+     * @param affKey Cache affinity key.
+     */
     private void addFullPartitionsMap(GridDhtPartitionsFullMessage m,
         Map<Object, T2<Integer, GridDhtPartitionFullMap>> dupData,
         boolean compress,
         Integer cacheId,
-        GridDhtPartitionFullMap locMap,
+        GridDhtPartitionFullMap map,
         Object affKey) {
         Integer dupDataCache = null;
 
-        if (compress) {
+        if (compress && affKey != null && !m.containsCache(cacheId)) {
             T2<Integer, GridDhtPartitionFullMap> state0 = dupData.get(affKey);
 
-            if (state0 != null && state0.get2().partitionStateEquals(locMap)) {
-                GridDhtPartitionFullMap locMap0 = new GridDhtPartitionFullMap(locMap.nodeId(),
-                    locMap.nodeOrder(),
-                    locMap.updateSequence());
+            if (state0 != null && state0.get2().partitionStateEquals(map)) {
+                GridDhtPartitionFullMap map0 = new GridDhtPartitionFullMap(map.nodeId(),
+                    map.nodeOrder(),
+                    map.updateSequence());
 
-                for (Map.Entry<UUID, GridDhtPartitionMap2> e : locMap.entrySet())
-                    locMap0.put(e.getKey(), e.getValue().emptyCopy());
+                for (Map.Entry<UUID, GridDhtPartitionMap2> e : map.entrySet())
+                    map0.put(e.getKey(), e.getValue().emptyCopy());
 
-                locMap = locMap0;
+                map = map0;
 
                 dupDataCache = state0.get1();
             }
             else
-                dupData.put(affKey, new T2<>(cacheId, locMap));
+                dupData.put(affKey, new T2<>(cacheId, map));
         }
 
-        m.addFullPartitionsMap(cacheId, locMap, dupDataCache);
+        m.addFullPartitionsMap(cacheId, map, dupDataCache);
     }
 
     /**
@@ -894,27 +936,10 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
      * @param id ID.
      */
     private void sendLocalPartitions(ClusterNode node, @Nullable GridDhtPartitionExchangeId id) {
-        GridDhtPartitionsSingleMessage m = new GridDhtPartitionsSingleMessage(id,
+        GridDhtPartitionsSingleMessage m = createPartitionsSingleMessage(node,
+            id,
             cctx.kernalContext().clientNode(),
-            cctx.versions().last(),
-            node.version().compareToIgnoreTimestamp(GridDhtPartitionsSingleMessage.PART_MAP_COMPRESS_SINCE) >= 0);
-
-        for (GridCacheContext cacheCtx : cctx.cacheContexts()) {
-            if (!cacheCtx.isLocal()) {
-                GridDhtPartitionMap2 locMap = cacheCtx.topology().localPartitionMap();
-
-                if (node.version().compareTo(GridDhtPartitionMap2.SINCE) < 0)
-                    locMap = new GridDhtPartitionMap(locMap.nodeId(), locMap.updateSequence(), locMap.map());
-
-                m.addLocalPartitionMap(cacheCtx.cacheId(), locMap);
-            }
-        }
-
-        for (GridClientPartitionTopology top : clientTops.values()) {
-            GridDhtPartitionMap2 locMap = top.localPartitionMap();
-
-            m.addLocalPartitionMap(top.cacheId(), locMap);
-        }
+            false);
 
         if (log.isDebugEnabled())
             log.debug("Sending local partitions [nodeId=" + node.id() + ", msg=" + m + ']');
@@ -930,6 +955,81 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
         catch (IgniteCheckedException e) {
             U.error(log, "Failed to send local partition map to node [node=" + node + ", exchId=" + id + ']', e);
         }
+    }
+
+    /**
+     * @param targetNode Target node.
+     * @param exchangeId ID.
+     * @param clientOnlyExchange Client exchange flag.
+     * @param sndCounters {@code True} if need send partition update counters.
+     * @return Message.
+     */
+    public GridDhtPartitionsSingleMessage createPartitionsSingleMessage(ClusterNode targetNode,
+        @Nullable GridDhtPartitionExchangeId exchangeId,
+        boolean clientOnlyExchange,
+        boolean sndCounters)
+    {
+        boolean compress =
+            targetNode.version().compareToIgnoreTimestamp(GridDhtPartitionsSingleMessage.PART_MAP_COMPRESS_SINCE) >= 0;
+
+        GridDhtPartitionsSingleMessage m = new GridDhtPartitionsSingleMessage(exchangeId,
+            clientOnlyExchange,
+            cctx.versions().last(),
+            compress);
+
+        Map<Object, T2<Integer,Map<Integer, GridDhtPartitionState>>> dupData = new HashMap<>();
+
+        for (GridCacheContext cacheCtx : cctx.cacheContexts()) {
+            if (!cacheCtx.isLocal()) {
+                GridDhtPartitionMap2 locMap = cacheCtx.topology().localPartitionMap();
+
+                if (targetNode.version().compareTo(GridDhtPartitionMap2.SINCE) < 0)
+                    locMap = new GridDhtPartitionMap(locMap.nodeId(), locMap.updateSequence(), locMap.map());
+
+                addPartitionMap(m,
+                    dupData,
+                    compress,
+                    cacheCtx.cacheId(),
+                    locMap,
+                    cacheCtx.affinity().affinityCache().similarAffinityKey());
+
+                if (sndCounters)
+                    m.partitionUpdateCounters(cacheCtx.cacheId(), cacheCtx.topology().updateCounters());
+            }
+        }
+
+        return m;
+    }
+
+    /**
+     * @param m Message.
+     * @param dupData Duplicated data map.
+     * @param compress {@code True} if need check for duplicated partition state data.
+     * @param cacheId Cache ID.
+     * @param map Map to add.
+     * @param affKey Cache affinity key.
+     */
+    private void addPartitionMap(GridDhtPartitionsSingleMessage m,
+        Map<Object, T2<Integer,Map<Integer, GridDhtPartitionState>>> dupData,
+        boolean compress,
+        Integer cacheId,
+        GridDhtPartitionMap2 map,
+        Object affKey) {
+        Integer dupDataCache = null;
+
+        if (compress) {
+            T2<Integer, Map<Integer, GridDhtPartitionState>> state0 = dupData.get(affKey);
+
+            if (state0 != null && state0.get2().equals(map.map())) {
+                dupDataCache = state0.get1();
+
+                map.map(Collections.<Integer, GridDhtPartitionState>emptyMap());
+            }
+            else
+                dupData.put(affKey, new T2<>(cacheId, map.map()));
+        }
+
+        m.addLocalPartitionMap(cacheId, map, dupDataCache);
     }
 
     /**
@@ -949,7 +1049,7 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
      * @param affChangeMsg Affinity change message.
      * @return Exchange future.
      */
-    GridDhtPartitionsExchangeFuture exchangeFuture(GridDhtPartitionExchangeId exchId,
+    private GridDhtPartitionsExchangeFuture exchangeFuture(GridDhtPartitionExchangeId exchId,
         @Nullable DiscoveryEvent discoEvt,
         @Nullable Collection<DynamicCacheChangeRequest> reqs,
         @Nullable CacheAffinityChangeMessage affChangeMsg) {

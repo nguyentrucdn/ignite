@@ -157,6 +157,10 @@ public class GridDhtPartitionFullMap extends HashMap<UUID, GridDhtPartitionMap2>
         return updateSeq;
     }
 
+    /**
+     * @param fullMap Map.
+     * @return {@code True} if this map and given map contain the same data.
+     */
     public boolean partitionStateEquals(GridDhtPartitionFullMap fullMap) {
         if (size() != fullMap.size())
             return false;

@@ -1518,7 +1518,7 @@ class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 Long cntr0 = res.get(part.id());
                 long cntr1 = part.updateCounter();
 
-                if ((cntr0 == null || cntr1 > cntr0) && cntr1 != 0)
+                if ((cntr0 == null || cntr1 > cntr0) && cntr1 != 0L)
                     res.put(part.id(), cntr1);
             }
 

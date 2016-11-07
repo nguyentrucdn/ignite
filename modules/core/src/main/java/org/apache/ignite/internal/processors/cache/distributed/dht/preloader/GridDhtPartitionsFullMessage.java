@@ -29,10 +29,8 @@ import org.apache.ignite.internal.GridDirectMap;
 import org.apache.ignite.internal.GridDirectTransient;
 import org.apache.ignite.internal.processors.affinity.AffinityTopologyVersion;
 import org.apache.ignite.internal.processors.cache.GridCacheSharedContext;
-import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionState;
 import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
 import org.apache.ignite.internal.util.tostring.GridToStringInclude;
-import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.internal.S;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.plugin.extensions.communication.MessageCollectionItemType;
@@ -97,6 +95,9 @@ public class GridDhtPartitionsFullMessage extends GridDhtPartitionsAbstractMessa
         this.topVer = topVer;
     }
 
+    /**
+     * @param compress {@code True} if it is possible to use compression for message.
+     */
     public void compress(boolean compress) {
         this.compress = compress;
     }
@@ -110,17 +111,18 @@ public class GridDhtPartitionsFullMessage extends GridDhtPartitionsAbstractMessa
 
     /**
      * @param cacheId Cache ID.
-     * @param fullMap Full partitions map.
+     * @return {@code True} if message contains full map for given cache.
      */
-    public void addFullPartitionsMap(int cacheId, GridDhtPartitionFullMap fullMap) {
-        addFullPartitionsMap(cacheId, fullMap, null);
+    public boolean containsCache(int cacheId) {
+        return parts != null && parts.containsKey(cacheId);
     }
 
     /**
      * @param cacheId Cache ID.
      * @param fullMap Full partitions map.
+     * @param dupDataCache Optional ID of cache with the same partition state map.
      */
-    public void addFullPartitionsMap(int cacheId, GridDhtPartitionFullMap fullMap, Integer dupDataCache) {
+    public void addFullPartitionsMap(int cacheId, GridDhtPartitionFullMap fullMap, @Nullable Integer dupDataCache) {
         if (parts == null)
             parts = new HashMap<>();
 
@@ -238,12 +240,12 @@ public class GridDhtPartitionsFullMessage extends GridDhtPartitionsAbstractMessa
 
                     assert map2 != null : e.getValue();
 
-                    for (Map.Entry<UUID, GridDhtPartitionMap2> e0 : map1.entrySet()) {
-                        GridDhtPartitionMap2 partMap1 = e0.getValue();
+                    for (Map.Entry<UUID, GridDhtPartitionMap2> e0 : map2.entrySet()) {
+                        GridDhtPartitionMap2 partMap1 = map1.get(e0.getKey());
 
-                        assert partMap1.map().isEmpty();
+                        assert partMap1 != null && partMap1.map().isEmpty() : partMap1;
 
-                        GridDhtPartitionMap2 partMap2 = map1.get(e0.getKey());
+                        GridDhtPartitionMap2 partMap2 = e0.getValue();
 
                         assert partMap2 != null;
 
