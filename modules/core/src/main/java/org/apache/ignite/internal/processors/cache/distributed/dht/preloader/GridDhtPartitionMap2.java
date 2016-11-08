@@ -112,9 +112,11 @@ public class GridDhtPartitionMap2 implements Comparable<GridDhtPartitionMap2>, E
      * @return Copy with empty partition state map.
      */
     public GridDhtPartitionMap2 emptyCopy() {
-        Map<Integer, GridDhtPartitionState> map = U.newHashMap(0);
-
-        return new GridDhtPartitionMap2(nodeId, updateSeq, top, map, moving);
+        return new GridDhtPartitionMap2(nodeId,
+            updateSeq,
+            top,
+            U.<Integer, GridDhtPartitionState>newHashMap(0),
+            moving);
     }
 
     /**

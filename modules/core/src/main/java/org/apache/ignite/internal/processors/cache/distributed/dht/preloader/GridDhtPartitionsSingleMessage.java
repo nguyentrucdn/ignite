@@ -26,6 +26,7 @@ import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.internal.GridDirectMap;
 import org.apache.ignite.internal.GridDirectTransient;
 import org.apache.ignite.internal.processors.cache.GridCacheSharedContext;
+import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionState;
 import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
 import org.apache.ignite.internal.util.tostring.GridToStringInclude;
 import org.apache.ignite.internal.util.typedef.F;
@@ -200,7 +201,7 @@ public class GridDhtPartitionsSingleMessage extends GridDhtPartitionsAbstractMes
             if (compressed())
                 parts = U.unmarshalZip(ctx.marshaller(), partsBytes, U.resolveClassLoader(ldr, ctx.gridConfig()));
             else
-                parts =U.unmarshal(ctx, partsBytes, U.resolveClassLoader(ldr, ctx.gridConfig()));
+                parts = U.unmarshal(ctx, partsBytes, U.resolveClassLoader(ldr, ctx.gridConfig()));
         }
 
         if (partCntrsBytes != null && partCntrs == null) {
@@ -218,13 +219,15 @@ public class GridDhtPartitionsSingleMessage extends GridDhtPartitionsAbstractMes
 
                 assert map1 != null : e.getKey();
                 assert F.isEmpty(map1.map());
+                assert !map1.hasMovingPartitions();
 
                 GridDhtPartitionMap2 map2 = parts.get(e.getValue());
 
                 assert map2 != null : e.getValue();
                 assert map2.map() != null;
 
-                map1.map(new HashMap<>(map2.map()));
+                for (Map.Entry<Integer, GridDhtPartitionState> e0 : map2.map().entrySet())
+                    map1.put(e0.getKey(), e0.getValue());
             }
         }
     }

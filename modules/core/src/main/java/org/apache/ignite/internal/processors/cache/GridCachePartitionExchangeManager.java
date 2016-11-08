@@ -1023,7 +1023,7 @@ public class GridCachePartitionExchangeManager<K, V> extends GridCacheSharedMana
             if (state0 != null && state0.get2().equals(map.map())) {
                 dupDataCache = state0.get1();
 
-                map.map(Collections.<Integer, GridDhtPartitionState>emptyMap());
+                map.map(U.<Integer, GridDhtPartitionState>newHashMap(0));
             }
             else
                 dupData.put(affKey, new T2<>(cacheId, map.map()));

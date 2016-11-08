@@ -29,6 +29,7 @@ import org.apache.ignite.internal.GridDirectMap;
 import org.apache.ignite.internal.GridDirectTransient;
 import org.apache.ignite.internal.processors.affinity.AffinityTopologyVersion;
 import org.apache.ignite.internal.processors.cache.GridCacheSharedContext;
+import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionState;
 import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
 import org.apache.ignite.internal.util.tostring.GridToStringInclude;
 import org.apache.ignite.internal.util.typedef.internal.S;
@@ -244,12 +245,14 @@ public class GridDhtPartitionsFullMessage extends GridDhtPartitionsAbstractMessa
                         GridDhtPartitionMap2 partMap1 = map1.get(e0.getKey());
 
                         assert partMap1 != null && partMap1.map().isEmpty() : partMap1;
+                        assert !partMap1.hasMovingPartitions() : partMap1;
 
                         GridDhtPartitionMap2 partMap2 = e0.getValue();
 
                         assert partMap2 != null;
 
-                        partMap1.map(new HashMap<>(partMap2.map()));
+                        for (Map.Entry<Integer, GridDhtPartitionState> stateEntry : partMap2.entrySet())
+                            partMap1.put(stateEntry.getKey(), stateEntry.getValue());
                     }
                 }
             }
