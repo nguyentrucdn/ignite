@@ -4005,21 +4005,7 @@ class ServerImpl extends TcpDiscoveryImpl {
                         spi.onExchange(node.id(), node.id(), data,
                             U.resolveClassLoader(spi.ignite().configuration()));
 
-                    Map<Integer, byte[]> d0 = spi.collectExchangeData(node.id());
-
-                    if (!F.isEmpty(msg.oldNodesDiscoveryData())) {
-                        try {
-                            Object o1 = spi.marshaller().unmarshal(d0.get(1), null);
-                            Object o2 = spi.marshaller().unmarshal(msg.oldNodesDiscoveryData().values().iterator().next().get(1), null);
-
-                            System.out.println();
-                        }
-                        catch (Exception e) {
-                            e.printStackTrace();;
-                        }
-                    }
-
-                    msg.addDiscoveryData(locNodeId, d0);
+                    msg.addDiscoveryData(locNodeId, spi.collectExchangeData(node.id()));
 
                     processMessageFailedNodes(msg);
                 }
